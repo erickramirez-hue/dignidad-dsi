@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>La dignidad humana frente a las realidades sociales · Módulo 3</title>
+<meta name="description" content="Sesión interactiva del Módulo 3: La dignidad de la persona humana desde la Doctrina Social de la Iglesia.">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="top hidden" id="top">
+  <div class="top-in">
+    <div class="brand"><i></i> Dignidad humana · DSI</div>
+    <button class="sync hidden" id="syncBtn" title="Seguir al facilitador">Seguir al facilitador: no</button>
+    <div class="who" id="who"></div>
+  </div>
+  <div class="progress"><b id="bar"></b></div>
+</header>
+
+<!-- REGISTRO -->
+<section class="gate hidden" id="gate">
+  <div class="card">
+    <div class="kicker">Módulo 3 · Sesión única · 60 min</div>
+    <h1 style="font-size:2rem">La dignidad humana frente a las realidades sociales</h1>
+    <p class="lead" style="font-size:1rem">Antes de comenzar, regístrate. Tus respuestas durante la sesión quedarán asociadas a estos datos.</p>
+    <form id="regForm" autocomplete="off" novalidate>
+      <label for="nombre">Nombre</label>
+      <input type="text" id="nombre" maxlength="80" placeholder="Nombre y apellido" required>
+      <label for="decanato">Decanato <span style="font-weight:400;color:var(--ink2)">(solo el número)</span></label>
+      <input type="number" id="decanato" inputmode="numeric" min="1" step="1" placeholder="Ej. 12" required>
+      <label>Pastoral</label>
+      <div class="radio">
+        <label><input type="radio" name="pastoral" value="Pastoral de adolescentes"><span>Pastoral de<br>adolescentes</span></label>
+        <label><input type="radio" name="pastoral" value="Pastoral juvenil"><span>Pastoral<br>juvenil</span></label>
+      </div>
+      <div class="err" id="regErr"></div>
+      <button class="btn gold" style="width:100%;margin-top:.6rem">Entrar a la sesión →</button>
+    </form>
+    <p class="notice hidden" id="localNotice" style="margin-top:1rem">Modo local (sin base de datos en la nube): las respuestas solo se guardan en este dispositivo.</p>
+  </div>
+  <p style="text-align:center;margin-top:1rem"><a href="#admin" style="font-size:.8rem;color:var(--ink2)">Acceso facilitador</a></p>
+</section>
+
+<!-- SESIÓN -->
+<main class="hidden" id="main"></main>
+<nav class="nav hidden" id="nav">
+  <div class="nav-in">
+    <button class="btn ghost" id="prev">← Anterior</button>
+    <div class="dots" id="dots"></div>
+    <button class="btn" id="next">Siguiente →</button>
+  </div>
+</nav>
+
+<!-- ADMIN -->
+<main class="hidden" id="admin"></main>
+
+<script src="config.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
