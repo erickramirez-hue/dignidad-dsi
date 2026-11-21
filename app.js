@@ -206,7 +206,7 @@ let user = jget(LS.user, null);
 let answers = jget(LS.ans, {});
 let cur = Math.min(jget(LS.step, 0), STEPS.length - 1);
 let visited = new Set([0]);
-let follow = jget(LS.follow, false);
+let follow = jget(LS.follow, true);
 let isAdmin = false;
 const timers = {};
 
