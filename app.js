@@ -58,19 +58,24 @@ const DB = {
     } while (tok);
     return out;
   },
-  async getStep() {
-    if (!CLOUD) return jget("dh_local_state", null)?.paso ?? null;
+  async getState() {
+    if (!CLOUD) { const s = jget("dh_local_state", {}); return { paso: s.paso ?? null, contenido: s.contenido || "" }; }
     const r = await fetch(`${this.base()}/sesion/estado?key=${FB.apiKey}`);
-    if (!r.ok) return null;
-    const j = await r.json(); const v = j.fields?.paso?.integerValue;
-    return v === undefined ? null : +v;
+    if (!r.ok) return { paso: null, contenido: "" };
+    const f = (await r.json()).fields || {};
+    return { paso: f.paso?.integerValue === undefined ? null : +f.paso.integerValue, contenido: f.contenido?.stringValue || "" };
   },
-  async setStep(n) {
-    if (!CLOUD) { jset("dh_local_state", { paso: n }); return; }
-    await fetch(`${this.base()}/sesion/estado?key=${FB.apiKey}`, {
-      method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ fields: { paso: { integerValue: String(n) } } })
+  async getStep() { return (await this.getState()).paso; },
+  async patchState(field, value) {
+    if (!CLOUD) { jset("dh_local_state", { ...jget("dh_local_state", {}), [field]: field === "paso" ? +value : value }); return; }
+    const body = { fields: { [field]: field === "paso" ? { integerValue: String(value) } : { stringValue: String(value) } } };
+    const r = await fetch(`${this.base()}/sesion/estado?updateMask.fieldPaths=${field}&key=${FB.apiKey}`, {
+      method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body)
     });
+    if (!r.ok) throw new Error("state " + r.status);
   },
+  setStep(n) { return this.patchState("paso", n); },
+  setContent(str) { return this.patchState("contenido", str); },
   async clear() {
     if (!CLOUD) { localStorage.removeItem(LS.local); return; }
     const rows = await this.all();
@@ -208,11 +213,14 @@ let cur = Math.min(jget(LS.step, 0), STEPS.length - 1);
 let visited = new Set([0]);
 let follow = jget(LS.follow, true);
 let isAdmin = false;
+let editMode = false, dirty = false, saveT = null;
+let CONTENT = {}, ORIG = [], lastContentStr = null;
+const ADMIN_USER = { pid: "admin", nombre: "Facilitador", decanato: "-", pastoral: "Vista del facilitador" };
 const timers = {};
 
 /* ---------- Registro ---------- */
 function showGate() {
-  ["top", "main", "nav", "admin"].forEach(i => $("#" + i).classList.add("hidden"));
+  ["top", "main", "nav", "admin", "rail", "editbar"].forEach(i => $("#" + i).classList.add("hidden"));
   $("#gate").classList.remove("hidden");
   $("#localNotice").classList.toggle("hidden", CLOUD);
 }
@@ -233,19 +241,30 @@ $("#regForm").addEventListener("submit", e => {
 });
 
 /* ---------- Sesión ---------- */
+function showSession() {
+  $("#gate").classList.add("hidden"); $("#admin").classList.add("hidden");
+  ["top", "main", "nav", "rail"].forEach(i => $("#" + i).classList.remove("hidden"));
+  $("#editbar").classList.toggle("hidden", !isAdmin);
+  $("#syncBtn").classList.toggle("hidden", isAdmin);
+  document.body.classList.add("has-rail");
+  $("#who").innerHTML = isAdmin ? `<b>Facilitador</b><br>Vista con edición` : `<b>${esc(user.nombre)}</b><br>Decanato ${user.decanato} · ${esc(user.pastoral)}`;
+}
 function startSession() {
-  $("#gate").classList.add("hidden");
-  ["top", "main", "nav"].forEach(i => $("#" + i).classList.remove("hidden"));
-  $("#who").innerHTML = `<b>${esc(user.nombre)}</b><br>Decanato ${user.decanato} · ${esc(user.pastoral)}`;
+  showSession();
   $("#dots").innerHTML = STEPS.map((s, i) => `<button title="${esc(s.title)}" data-i="${i}" aria-label="${esc(s.title)}"></button>`).join("");
-  $("#syncBtn").classList.remove("hidden");
   renderSync(); go(cur, false);
-  setInterval(pollStep, 4000);
+  loadContent(); setInterval(poll, 8000);
 }
 function go(i, remember = true) {
+  if (editMode && dirty) saveContent();
   cur = Math.max(0, Math.min(STEPS.length - 1, i)); visited.add(cur); jset(LS.step, cur);
   const s = STEPS[cur];
   $("#main").innerHTML = `<article class="step">${s.html()}</article>`;
+  ORIG = editables().map(e => e.innerHTML);
+  applyContent();
+  if (editMode) setEdit(true);
+  if (isAdmin) DB.setStep(cur).catch(() => {});
+  renderRail();
   window.scrollTo(0, 0);
   document.title = s.title + " · Dignidad humana";
   $("#bar").style.width = ((cur + 1) / STEPS.length * 100) + "%";
@@ -263,6 +282,7 @@ function hydrate() {
   updateFicha();
 }
 function setAnswer(key, value) {
+  if (isAdmin) return;
   answers[key] = value; jset(LS.ans, answers);
   clearTimeout(timers[key]);
   timers[key] = setTimeout(async () => {
@@ -287,6 +307,7 @@ function updateFicha() {
 }
 document.addEventListener("input", e => {
   const t = e.target;
+  if (editMode && t.classList && t.classList.contains("editing")) { dirty = true; queueSave(); return; }
   if (t.matches("textarea[data-key]")) { setAnswer(t.dataset.key, t.value); if (t.hasAttribute("data-ficha")) updateFicha(); }
 });
 document.addEventListener("change", e => {
@@ -297,7 +318,8 @@ $("#prev").onclick = () => go(cur - 1);
 $("#next").onclick = () => go(cur + 1);
 $("#dots").onclick = e => { const b = e.target.closest("button"); if (b) go(+b.dataset.i); };
 document.addEventListener("keydown", e => {
-  if (e.target.matches("textarea,input,select")) return;
+  if (editMode && e.key === "Enter" && e.target.classList && e.target.classList.contains("editing")) { e.preventDefault(); document.execCommand("insertLineBreak"); return; }
+  if (e.target.matches("textarea,input,select") || e.target.isContentEditable) return;
   if (!$("#main").classList.contains("hidden")) {
     if (e.key === "ArrowRight" || e.key === "PageDown") go(cur + 1);
     if (e.key === "ArrowLeft" || e.key === "PageUp") go(cur - 1);
@@ -305,11 +327,79 @@ document.addEventListener("keydown", e => {
   }
 });
 function renderSync() { const b = $("#syncBtn"); b.textContent = "Seguir al facilitador: " + (follow ? "sí" : "no"); b.classList.toggle("on", follow); }
-$("#syncBtn").onclick = () => { follow = !follow; jset(LS.follow, follow); renderSync(); if (follow) pollStep(); };
-async function pollStep() {
-  if (!follow || isAdmin || $("#main").classList.contains("hidden")) return;
-  try { const n = await DB.getStep(); if (n !== null && n !== cur && n >= 0 && n < STEPS.length) go(n); } catch {}
+$("#syncBtn").onclick = () => { follow = !follow; jset(LS.follow, follow); renderSync(); if (follow) poll(); };
+async function poll() {
+  if (document.hidden || isAdmin || $("#main").classList.contains("hidden")) return;
+  try {
+    const st = await DB.getState();
+    if (follow && st.paso !== null && st.paso !== cur && st.paso >= 0 && st.paso < STEPS.length) go(st.paso);
+    if (st.contenido !== lastContentStr) setContent(st.contenido);
+  } catch {}
 }
+async function loadContent() { try { setContent((await DB.getState()).contenido); } catch {} }
+function setContent(str) {
+  lastContentStr = str;
+  try { CONTENT = str ? JSON.parse(str) : {}; } catch { CONTENT = {}; }
+  applyContent();
+}
+
+// ---------- Riel lateral: en qué diapositiva estamos ----------
+function renderRail() {
+  $("#rail").innerHTML = STEPS.map((s, i) => `<button data-i="${i}" class="${i === cur ? "cur" : visited.has(i) ? "vis" : ""}" title="${esc(s.title)}" aria-label="Diapositiva ${i + 1}: ${esc(s.title)}"><b>${i + 1}</b><span>${esc(s.title)}</span></button>`).join("") + `<div class="rail-n">${cur + 1} / ${STEPS.length}</div>`;
+}
+$("#rail").onclick = e => { const b = e.target.closest("button"); if (b) go(+b.dataset.i); };
+
+// ---------- Modo edición del facilitador (los cambios llegan a todos) ----------
+const EDIT_SEL = "h1,h2,h3,p,li,.kicker,.tag,.quote,.ex,.pill,.desc,.q,.notice,.ask>label";
+function editables() { const a = $("#main article"); return a ? [...a.querySelectorAll(EDIT_SEL)] : []; }
+function sanitize(html) {
+  const t = document.createElement("template"); t.innerHTML = html;
+  const ok = ["B", "I", "U", "EM", "STRONG", "BR", "SMALL", "SPAN"];
+  (function walk(n) {
+    [...n.childNodes].forEach(c => {
+      if (c.nodeType === 3) return;
+      if (c.nodeType !== 1) { c.remove(); return; }
+      if (!ok.includes(c.tagName)) { c.replaceWith(document.createTextNode(c.textContent)); return; }
+      [...c.attributes].forEach(a => { if (!(c.tagName === "SPAN" && a.name === "class" && /^(time|hint)$/.test(a.value))) c.removeAttribute(a.name); });
+      walk(c);
+    });
+  })(t.content);
+  return t.innerHTML;
+}
+function applyContent() {
+  const ov = CONTENT[STEPS[cur].id]; if (!ov) return;
+  const els = editables();
+  for (const [i, h] of Object.entries(ov)) { const el = els[+i]; if (el && !el.classList.contains("editing")) el.innerHTML = sanitize(h); }
+}
+function setEdit(on) {
+  editMode = on;
+  editables().forEach(el => { if (on) { el.setAttribute("contenteditable", "true"); el.classList.add("editing"); } else { el.removeAttribute("contenteditable"); el.classList.remove("editing"); } });
+  document.body.classList.toggle("editmode", on);
+  $("#eBtn").textContent = on ? "✔ Terminar edición" : "✎ Modo edición";
+  $("#eReset").classList.toggle("hidden", !on);
+  $("#eInfo").textContent = on ? "Haz clic en cualquier texto para editarlo" : "";
+}
+function queueSave() { clearTimeout(saveT); $("#eInfo").textContent = "Guardando…"; saveT = setTimeout(saveContent, 800); }
+async function saveContent() {
+  clearTimeout(saveT); dirty = false;
+  const id = STEPS[cur].id, ov = {};
+  editables().forEach((el, i) => { const h = sanitize(el.innerHTML); if (h !== sanitize(ORIG[i] || "")) ov[i] = h; });
+  if (Object.keys(ov).length) CONTENT[id] = ov; else delete CONTENT[id];
+  const str = JSON.stringify(CONTENT);
+  try { await DB.setContent(str); lastContentStr = str; $("#eInfo").textContent = "✔ Guardado para todos"; }
+  catch { $("#eInfo").textContent = "⚠ No se pudo guardar"; }
+}
+$("#eBtn").onclick = () => { if (editMode && dirty) saveContent(); setEdit(!editMode); };
+$("#eReset").onclick = async () => {
+  delete CONTENT[STEPS[cur].id]; dirty = false;
+  const str = JSON.stringify(CONTENT);
+  try { await DB.setContent(str); lastContentStr = str; } catch {}
+  go(cur);
+};
+document.addEventListener("paste", e => {
+  if (!(editMode && e.target.classList && e.target.classList.contains("editing"))) return;
+  e.preventDefault(); document.execCommand("insertText", false, (e.clipboardData || window.clipboardData).getData("text/plain"));
+});
 
 /* ---------- Panel del facilitador ---------- */
 function buildRows(recs) {
@@ -329,7 +419,7 @@ function download(name, text, mime) {
 const stamp = () => new Date().toISOString().slice(0, 16).replace(/[:T]/g, "-");
 
 function showAdmin() {
-  ["gate", "main", "nav", "top"].forEach(i => $("#" + i).classList.add("hidden"));
+  ["gate", "main", "nav", "top", "rail", "editbar"].forEach(i => $("#" + i).classList.add("hidden"));
   const A = $("#admin"); A.classList.remove("hidden");
   if (!isAdmin) {
     A.innerHTML = `<div class="gate" style="margin-top:4vh"><div class="card"><h2>Panel del facilitador</h2>
@@ -408,10 +498,10 @@ async function tab(t) {
 /* ---------- Arranque ---------- */
 function route() {
   if (location.hash === "#admin") return showAdmin();
-  if (isAdmin) { $("#admin").classList.add("hidden"); }
+  if (isAdmin) { $("#admin").classList.add("hidden"); if (!user) user = ADMIN_USER; }
   user ? startSessionOnce() : showGate();
 }
 let started = false;
-function startSessionOnce() { if (started) { $("#admin").classList.add("hidden"); ["top", "main", "nav"].forEach(i => $("#" + i).classList.remove("hidden")); hydrate(); return; } started = true; startSession(); }
+function startSessionOnce() { if (started) { showSession(); go(cur, false); return; } started = true; startSession(); }
 addEventListener("hashchange", route);
 route();
