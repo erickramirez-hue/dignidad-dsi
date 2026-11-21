@@ -253,7 +253,9 @@ function startSession() {
   showSession();
   $("#dots").innerHTML = STEPS.map((s, i) => `<button title="${esc(s.title)}" data-i="${i}" aria-label="${esc(s.title)}"></button>`).join("");
   renderSync(); go(cur, false);
-  loadContent(); setInterval(poll, 8000);
+  isAdmin ? loadContent() : poll();
+  setInterval(poll, 8000);
+  document.addEventListener("visibilitychange", () => { if (!document.hidden) poll(); });
 }
 function go(i, remember = true) {
   if (editMode && dirty) saveContent();
